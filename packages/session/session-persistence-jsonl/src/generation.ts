@@ -15,6 +15,7 @@ import {
   open as fsOpen,
   readFile as fsReadFile,
   readdir as fsReaddir,
+  rename as fsRename,
   rm as fsRm,
   stat as fsStat,
   type FileHandle,
@@ -37,6 +38,7 @@ import type {
 import { validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
 import type { JsonlCompression } from './format.ts'
 import { generationLogFilename, logSuffix, SessionLogScanner } from './format.ts'
+import { publishStagedByLink } from './publish.ts'
 import { publishNewFileWin32 } from './win32.ts'
 import {
   compressZstdFrame,
@@ -180,6 +182,7 @@ interface GenerationFileSystem {
   stat(path: string): Promise<JsonlPhysicalIdentity>
   lstat(path: string): Promise<{ isFile(): boolean; isSymbolicLink(): boolean }>
   link(existingPath: string, newPath: string): Promise<void>
+  rename(existingPath: string, newPath: string): Promise<void>
   rm(path: string): Promise<void>
 }
 
@@ -193,6 +196,8 @@ interface JsonlGenerationInternals {
   readonly platform: NodeJS.Platform
   readonly publishNewWin32: typeof publishNewFileWin32
   readonly barrier: (phase: GenerationBarrierPhase, attempt: number) => void | Promise<void>
+  /** Observability hook receiving the target path when link publication degrades to rename. */
+  readonly logLinkDegraded: (target: string) => void
 }
 
 /** Dependency overrides for an isolated generation runtime. */
@@ -220,6 +225,7 @@ const defaultFileSystem: GenerationFileSystem = {
   stat: path => fsStat(path, { bigint: true }),
   lstat: path => fsLstat(path),
   link: fsLink,
+  rename: fsRename,
   rm: path => fsRm(path, { force: true }),
 }
 
@@ -229,6 +235,9 @@ const defaultInternals: JsonlGenerationInternals = {
   platform: process.platform,
   publishNewWin32: publishNewFileWin32,
   barrier: () => {},
+  logLinkDegraded: (target) => {
+    console.warn(`session-persistence: hard link denied, published by rename instead: "${target}"`)
+  },
 }
 
 function isEEXIST(error: unknown): boolean {
@@ -831,7 +840,7 @@ async function publishCurrentExclusive(
     }
   }
   try {
-    await internals.fs.link(staged, currentPath)
+    await publishStagedByLink(internals.fs, staged, currentPath, internals.logLinkDegraded)
   } catch (error) {
     /* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
     if (isEEXIST(error)) return false

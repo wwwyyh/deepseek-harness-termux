@@ -187,6 +187,12 @@ for (const platform of ['win32', 'freebsd']) {
   });
 }
 
+test('a faked android platform locks through the koffi libc fallback', { timeout, skip: process.platform === 'linux' ? false : 'The koffi libc.so fallback needs a Linux libc' }, async (t) => {
+  const scope = resources(t);
+  const child = await childFixture(t, scope, 'flock-android.js');
+  cleanExit(await child.waitForExit());
+});
+
 test('acquisition resolves asynchronously to void and the same fd can reacquire', nativeOnly, async (t) => {
   const scope = resources(t);
   const owner = scope.open();

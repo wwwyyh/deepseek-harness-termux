@@ -14,7 +14,7 @@ import {
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
 import { readdirSync, type Dirent } from 'node:fs'
-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readdir, realpath, link, rename, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -55,6 +55,7 @@ import {
   type JsonlPhysicalIdentity,
   type PreparedJsonlMigration,
 } from './generation.ts'
+import { publishStagedByLink } from './publish.ts'
 
 export type { JsonlCompression } from './format.ts'
 
@@ -1220,9 +1221,19 @@ class JsonlSessionPersistence extends SessionPersistence {
     // Publish via link()+unlink(), NOT rename(): link fails with EEXIST if the
     // final path already exists, so two processes materializing the same id
     // concurrently cannot clobber each other. rename() would silently overwrite.
+    // Where the environment denies link(2) outright (SELinux app domains such
+    // as MIUI forbid hard links), publishStagedByLink degrades to rename while
+    // keeping the EEXIST refusal for an existing target.
     let linked = false
     try {
-      await link(tmp, finalPath)
+      await publishStagedByLink(
+        { link, rename, stat },
+        tmp,
+        finalPath,
+        (target) => {
+          this.ctx.logger.warn(`${this.name}: hard link denied, published session log by rename instead: "${target}"`)
+        },
+      )
       linked = true
     } finally {
       // Remove an unpublished temp on failure. After publication, defer cleanup

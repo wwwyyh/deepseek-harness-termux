@@ -8,6 +8,7 @@
 
 import { getDshRuntimeVersion, loadLayeredEnv, StartupError } from '@deepseek-ai/dsh-app-boot'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { createRequire } from 'node:module'
 import { parseDshArgs } from './args.ts'
 import { reportStartupFailure } from './startup-diagnostics.ts'
 import type { RunProfileOptions } from './profile-boot.ts'
@@ -73,6 +74,48 @@ export async function runCli(options: RunCliOptions = {}): Promise<void> {
   }
 }
 
+/**
+ * Whether the builtin addon can supply Node internal modules. On non-glibc
+ * platforms such as Android/bionic no usable binding ships and every addon
+ * lookup refuses to run; profile resolution then needs `--expose-internals`.
+ */
+function builtinAddonUsable(): boolean {
+  try {
+    const require = createRequire(import.meta.url)
+    const addon = require('node-addon-require-builtin') as { requireBuiltin(id: string): unknown }
+    addon.requireBuiltin('internal/modules/cjs/loader')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Relaunch this CLI under `--expose-internals` and exit with its outcome, so
+ * profile resolution can require Node internals directly where the builtin
+ * addon is unusable. One-shot: the relaunch carries the flag in
+ * `process.execArgv`, which is also why NODE_OPTIONS cannot replace this —
+ * Node rejects that flag in NODE_OPTIONS.
+ */
+async function relaunchWithExposedInternals(script: string): Promise<never> {
+  const { spawn } = await import('node:child_process')
+  const child = spawn(
+    process.execPath,
+    [...process.execArgv, '--expose-internals', script, ...process.argv.slice(2)],
+    { stdio: 'inherit' },
+  )
+  const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', (code, signal) => { resolve({ code, signal }) })
+  })
+  if (outcome.signal !== null) process.kill(process.pid, outcome.signal)
+  process.exit(outcome.code ?? 0)
+}
+
 if (import.meta.main) {
+  const script = process.argv[1]
+  if (script !== undefined && !process.execArgv.includes('--expose-internals') && !builtinAddonUsable()) {
+    await relaunchWithExposedInternals(script)
+  }
   await runCli()
 }

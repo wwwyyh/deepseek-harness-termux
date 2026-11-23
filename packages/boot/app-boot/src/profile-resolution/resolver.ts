@@ -609,20 +609,51 @@ class ResolutionRouter {
   }
 }
 
-function internalModules(): InternalModules {
+/**
+ * Load the accessor for Node internal modules: the builtin addon when usable,
+ * otherwise a direct require, which reaches the same modules only under
+ * `--expose-internals` (non-glibc platforms such as Android/bionic ship no
+ * usable addon binding; the hmr and vendored-loader lookups accept the same
+ * flag).
+ * @returns a function returning the requested internal module.
+ */
+function loadRequireBuiltin(): (moduleId: string) => unknown {
   const require = createRequire(import.meta.url)
-  const addon = require('node-addon-require-builtin') as { requireBuiltin(moduleId: string): unknown }
-  const esmModule = addon.requireBuiltin('internal/modules/esm/loader') as {
+  // NodeRequire's call signature returns any; binding it to this signature keeps
+  // the fallback's lookups typed instead of leaking any into the return path.
+  const directRequire: (moduleId: string) => unknown = require
+  try {
+    const addon = require('node-addon-require-builtin') as { requireBuiltin(moduleId: string): unknown }
+    // Probe one lookup: on an unsupported platform the addon loads but every lookup refuses to run.
+    addon.requireBuiltin('internal/modules/cjs/loader')
+    return moduleId => addon.requireBuiltin(moduleId)
+  } catch {
+    return (moduleId: string) => {
+      try {
+        return directRequire(moduleId)
+      } catch {
+        throw new Error(
+          'profile resolution: node-addon-require-builtin is unavailable and direct internal require failed; '
+          + 'restart Node with --expose-internals (required on non-glibc platforms such as Android)',
+        )
+      }
+    }
+  }
+}
+
+function internalModules(): InternalModules {
+  const requireBuiltin = loadRequireBuiltin()
+  const esmModule = requireBuiltin('internal/modules/esm/loader') as {
     getOrInitializeCascadedLoader(): ModuleLoaderV1 | ModuleLoaderV2
   }
-  const cjsModule = addon.requireBuiltin('internal/modules/cjs/loader') as { Module: CommonJsModule }
-  const cjsHelpers = addon.requireBuiltin('internal/modules/helpers') as {
+  const cjsModule = requireBuiltin('internal/modules/cjs/loader') as { Module: CommonJsModule }
+  const cjsHelpers = requireBuiltin('internal/modules/helpers') as {
     getCjsConditions(): ReadonlySet<string>
   }
-  const esmUtils = addon.requireBuiltin('internal/modules/esm/utils') as {
+  const esmUtils = requireBuiltin('internal/modules/esm/utils') as {
     getDefaultConditions(): readonly string[]
   }
-  const esmResolve = addon.requireBuiltin('internal/modules/esm/resolve') as {
+  const esmResolve = requireBuiltin('internal/modules/esm/resolve') as {
     defaultResolve(
       specifier: string,
       context: { parentURL?: string; conditions?: readonly string[] },

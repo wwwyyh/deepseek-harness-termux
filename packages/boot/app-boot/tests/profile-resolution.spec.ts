@@ -253,6 +253,31 @@ describe('runtime resolution', { concurrent: false }, () => {
       .toEqual({ marker: 1 })
   })
 
+  it('reports the --expose-internals fallback when the builtin addon is unusable', async () => {
+    const f = fixture()
+    // Swap the cached addon for one whose every lookup refuses to run, as on
+    // Android/bionic: the addon loads, then requireBuiltin throws.
+    const require = createRequire(import.meta.url)
+    const manifest = require.resolve('node-addon-require-builtin')
+    require('node-addon-require-builtin')
+    const cached = require.cache[manifest]
+    if (cached === undefined) throw new Error('builtin addon module is not in the CommonJS cache')
+    const savedExports = cached.exports as typeof import('node-addon-require-builtin')
+    cached.exports = {
+      requireBuiltin(id: string): unknown {
+        throw new Error(`simulated unusable addon: ${id}`)
+      },
+    }
+    try {
+      // This runner has no --expose-internals, so the direct-require fallback
+      // fails too and must surface the restart guidance.
+      const resolution = await resolutionOf(f)
+      expect(() => installRuntimeInterception(resolution)).toThrow(/--expose-internals/)
+    } finally {
+      cached.exports = savedExports
+    }
+  })
+
   it('fails resolution construction before writing when the profile manifest is malformed', async () => {
     const f = fixture()
     file(join(f.profile.dir, 'package.json'), '{')

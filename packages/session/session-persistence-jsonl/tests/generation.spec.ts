@@ -1372,6 +1372,32 @@ describe('JSONL immutable generation publication', () => {
     })).rejects.toMatchObject({ code: 'ENOENT', path: request.currentPath })
   })
 
+  it('degrades an EACCES-denied publication to rename and logs the target', async () => {
+    const root = await tempRoot()
+    const request = options(root)
+    await writeFile(request.sourcePath, line(header(0)) + line(event0))
+    const warnings: string[] = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...values: unknown[]) => {
+      warnings.push(values.join(' '))
+    })
+    const renamed: Array<[from: string, to: string]> = []
+    try {
+      await expect(ensureWithOverrides(request, {
+        platform: 'darwin',
+        fs: posixSimulationFs({
+          link: async () => { throw fsError('EACCES', 'link denied') },
+          rename: async (from, to) => { renamed.push([from, to]); await rename(from, to) },
+        }),
+      })).resolves.toMatchObject({ status: 'migrated', path: request.currentPath })
+    } finally {
+      spy.mockRestore()
+    }
+    expect(renamed).toHaveLength(1)
+    expect(warnings.join('\n')).toContain(`"${request.currentPath}"`)
+    expect(await readFile(request.currentPath, 'utf8')).toBe(line(header(SESSION_FORMAT_VERSION)) + line(event0))
+    expect((await readdir(root)).filter(name => name.includes('.tmp'))).toHaveLength(0)
+  })
+
   it('does not reopen a target after exclusive publication', async () => {
     const root = await tempRoot()
     const request = options(root)

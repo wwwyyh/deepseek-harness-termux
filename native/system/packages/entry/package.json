@@ -37,6 +37,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "dependencies": {
+    "koffi": "^3.3.2"
+  },
   "optionalDependencies": {
     "@deepseek-ai/node-addon-system-darwin-arm64": "workspace:~",
     "@deepseek-ai/node-addon-system-darwin-x64": "workspace:~",
