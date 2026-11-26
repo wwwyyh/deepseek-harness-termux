@@ -1,8 +1,8 @@
 // Assemble a self-contained npm deployment set for off-registry installs
 // (Termux/Android). Usage, from the repository root:
 //   tsx scripts/release/pack-offline-deploy.ts <outDir> <packed-dir> [<packed-dir> ...]
-// Computes the runtime dependency closure of @deepseek-ai/dsh (dependencies +
-// optionalDependencies through workspace manifests), copies the matching
+// Computes the runtime dependency closure of @deepseek-ai/dsh (dependencies,
+// optionalDependencies, and peerDependencies through workspace manifests), copies the matching
 // tarballs into <outDir>/tgz, and writes <outDir>/package.json whose
 // dependencies point at them through relative file: entries, so the directory
 // installs on any machine with plain `npm install`. Packages outside the
@@ -40,6 +40,7 @@ interface WorkspaceManifest {
   private?: boolean
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
 }
 
 /** Inputs of one offline deployment packing run. */
@@ -83,13 +84,16 @@ export function readWorkspaceManifests(cwd: string): Map<string, WorkspaceManife
 }
 
 /**
- * Walk dependencies and optionalDependencies from `entry` through workspace
- * manifests only; registry dependencies have no manifest and end the walk.
+ * Walk dependencies, optionalDependencies, and peerDependencies from `entry`
+ * through workspace manifests only; registry dependencies have no manifest and
+ * end the walk. Workspace peers must join: npm resolves a missing peer from
+ * the registry, whose stable release may reject the pre-release versions the
+ * deployment set carries.
  * @param manifests - Publishable workspace manifests by name.
  * @param entry - Package name to start from.
  * @returns Closure names in breadth-first discovery order, entry first.
  */
-export function runtimeClosure(manifests: ReadonlyMap<string, Pick<WorkspaceManifest, 'dependencies' | 'optionalDependencies'>>, entry: string): string[] {
+export function runtimeClosure(manifests: ReadonlyMap<string, Pick<WorkspaceManifest, 'dependencies' | 'optionalDependencies' | 'peerDependencies'>>, entry: string): string[] {
   const closure = new Set([entry])
   for (let frontier = [entry]; frontier.length > 0;) {
     const next = []
@@ -97,7 +101,7 @@ export function runtimeClosure(manifests: ReadonlyMap<string, Pick<WorkspaceMani
       // Every name in the closure was admitted through manifests.has().
       const manifest = manifests.get(name)
       if (manifest === undefined) throw new Error(`${name} is in the closure without a workspace manifest`)
-      for (const section of ['dependencies', 'optionalDependencies'] as const) {
+      for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies'] as const) {
         for (const dependency of Object.keys(manifest[section] ?? {})) {
           if (manifests.has(dependency) && !closure.has(dependency)) {
             closure.add(dependency)

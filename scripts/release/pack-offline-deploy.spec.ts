@@ -20,14 +20,16 @@ interface FixturePackage {
   directory: string
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
   private?: boolean
 }
 
 /**
  * A miniature repository shaped like the workspace: an entry CLI depending on
- * a transitive chain, a private package, an external registry dependency, and
- * a test-support package that nothing in the runtime closure depends on.
+ * a transitive chain, a workspace package reachable only through a
+ * peerDependency, a private package, an external registry dependency, and a
+ * test-support package that only devDependencies reference.
  */
 function repository(): { cwd: string; packed: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'dsh-offline-deploy-'))
@@ -49,6 +51,12 @@ function repository(): { cwd: string; packed: string } {
       version: '1.0.0',
       directory: 'packages/boot/app-boot',
       dependencies: { '@deepseek-ai/dsh-home-paths': 'workspace:*' },
+      peerDependencies: { '@deepseek-ai/cordis-scope': 'workspace:~' },
+    },
+    {
+      name: '@deepseek-ai/cordis-scope',
+      version: '0.1.0',
+      directory: 'vendor/scope',
     },
     {
       name: '@deepseek-ai/dsh-home-paths',
@@ -90,6 +98,7 @@ function packAll(packed: string): void {
   pack(packed, ENTRY, '1.0.0')
   pack(packed, '@deepseek-ai/dsh-app-boot', '1.0.0')
   pack(packed, '@deepseek-ai/dsh-home-paths', '1.0.0')
+  pack(packed, '@deepseek-ai/cordis-scope', '0.1.0')
   pack(packed, '@deepseek-ai/dsh-node-addon-system', '0.1.0')
 }
 
@@ -107,7 +116,7 @@ function manifestOf(outDir: string): DeploymentManifest {
 }
 
 describe('offline deployment packing', () => {
-  it('packs exactly the runtime closure: dependencies and optionalDependencies through workspace manifests, nothing else', () => {
+  it('packs exactly the runtime closure: dependencies, optionalDependencies, and peerDependencies through workspace manifests, nothing else', () => {
     const { cwd, packed } = repository()
     // Deliberately packed yet outside the closure: a test-support package and
     // a private workspace root. Neither may reach the deployment set.
@@ -122,8 +131,11 @@ describe('offline deployment packing', () => {
       ENTRY,
       '@deepseek-ai/dsh-app-boot',
       '@deepseek-ai/dsh-home-paths',
+      '@deepseek-ai/cordis-scope',
       '@deepseek-ai/dsh-node-addon-system',
     ]))
+    // A workspace peer must ship: npm would otherwise resolve the stable
+    // registry release, whose peer range can reject the pre-release set.
     // devDependencies never join (the CLI dev-depends on test-support), registry
     // dependencies have no tarball to copy, and the private package stays out
     // although packed.
@@ -135,6 +147,7 @@ describe('offline deployment packing', () => {
       tarballName(ENTRY, '1.0.0'),
       tarballName('@deepseek-ai/dsh-app-boot', '1.0.0'),
       tarballName('@deepseek-ai/dsh-home-paths', '1.0.0'),
+      tarballName('@deepseek-ai/cordis-scope', '0.1.0'),
       tarballName('@deepseek-ai/dsh-node-addon-system', '0.1.0'),
     ].sort())
   })
@@ -148,6 +161,17 @@ describe('offline deployment packing', () => {
       .toThrow('packed tarballs missing for: @deepseek-ai/dsh-home-paths (deepseek-ai-dsh-home-paths-1.0.0.tgz)')
     // A partial deployment set would fail on the target machine instead.
     expect(existsSync(join(cwd, 'deploy'))).toBe(false)
+  })
+
+  it('refuses a workspace peer dependency that has no tarball instead of leaving it to the registry', () => {
+    const { cwd, packed } = repository()
+    packAll(packed)
+    // Only the peer edge reaches cordis-scope; dropping its tarball must fail
+    // the pack rather than ship a set whose npm install pulls the stable release.
+    rmSync(join(packed, tarballName('@deepseek-ai/cordis-scope', '0.1.0')))
+
+    expect(() => packOfflineDeploy({ cwd, outDir: 'deploy', sources: ['packed'] }))
+      .toThrow(`packed tarballs missing for: @deepseek-ai/cordis-scope (${tarballName('@deepseek-ai/cordis-scope', '0.1.0')})`)
   })
 
   it('refuses an absent source directory and a run without any source', () => {
@@ -172,6 +196,7 @@ describe('offline deployment packing', () => {
       [ENTRY]: `file:tgz/${tarballName(ENTRY, '1.0.0')}`,
       '@deepseek-ai/dsh-app-boot': `file:tgz/${tarballName('@deepseek-ai/dsh-app-boot', '1.0.0')}`,
       '@deepseek-ai/dsh-home-paths': `file:tgz/${tarballName('@deepseek-ai/dsh-home-paths', '1.0.0')}`,
+      '@deepseek-ai/cordis-scope': `file:tgz/${tarballName('@deepseek-ai/cordis-scope', '0.1.0')}`,
       '@deepseek-ai/dsh-node-addon-system': `file:tgz/${tarballName('@deepseek-ai/dsh-node-addon-system', '0.1.0')}`,
     })
     // Every file: target exists, so a plain npm install resolves locally.
@@ -203,6 +228,7 @@ describe('offline deployment packing', () => {
       tarballName(ENTRY, '1.0.0'),
       tarballName('@deepseek-ai/dsh-app-boot', '1.0.0'),
       tarballName('@deepseek-ai/dsh-home-paths', '1.0.0'),
+      tarballName('@deepseek-ai/cordis-scope', '0.1.0'),
       native,
     ].sort())
   })
