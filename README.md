@@ -1,74 +1,83 @@
-# DeepSeek Harness
+# DeepSeek Harness (Termux)
 
 English | [中文](README.zh.md)
 
-DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).
+This repository is a fork of [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) that adds native support for Android/Termux.
 
-It is built on an **everything-is-a-plugin** architecture and powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://arxiv.org/abs/2608.25512).
+DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com), built on an **everything-is-a-plugin** architecture and powered by [Cordis](https://github.com/cordiverse/cordis).
 
-Documentation: [https://deepseek-harness.github.io/deepseek-harness/](https://deepseek-harness.github.io/deepseek-harness/)
+## What changed
 
-## Developer preview
+Upstream DSH cannot be installed or run on Termux (Android arm64, bionic libc). These changes make it work without root or post-install patches:
 
-DeepSeek Harness is in _developer preview_ and iterating rapidly. **THERE WILL BE COMPATIBILITY-BREAKING CHANGES.**
+- **koffi ^3.3.2** compiles on bionic and ships android-arm64 prebuilts, so installs never compile it.
+- **`node-addon-require-builtin` fallback**: when the addon is unusable, DSH requires Node internals directly under `--expose-internals`; the CLI relaunches itself once with that flag.
+- **flock via koffi**: where no prebuilt system addon exists, the session lock calls bionic's `flock(2)` through koffi.
+- **link → rename**: when SELinux denies hard links, session logs publish by `rename(2)` instead of `link(2)`, so no Magisk policy module is needed.
 
-Review the [safety notice](SAFETY.md) before running the project.
+## Deploy
+
+Build a self-contained deployment set on a computer, then install it on the phone with plain `npm install`.
+
+### On the computer
+
+Requires Node and pnpm. From the repository root:
+
+```sh
+pnpm install
+pnpm run build:official
+pnpm run release:pack --family dsh --out dist/dsh --concurrency 8
+pnpm run release:pack --family vendor --out dist/vendor --concurrency 8
+pnpm --dir native/system/packages/entry pack --pack-destination ../../../../dist/native
+pnpm exec tsx scripts/release/pack-offline-deploy.ts dist/offline-deploy dist/dsh dist/vendor dist/native
+tar -czf dist/offline-deploy.tar.gz -C dist offline-deploy
+```
+
+`pack-offline-deploy.ts` computes the runtime dependency closure of `@deepseek-ai/dsh` and writes a `package.json` whose entries point at the copied tarballs through `file:` paths, so the phone resolves every workspace package locally. Then copy `dist/offline-deploy.tar.gz` to the phone (Termux runs `sshd` on port 8022):
+
+```sh
+scp -P 8022 dist/offline-deploy.tar.gz <user>@<phone-ip>:~/
+```
+
+### On the phone
+
+Requires Termux and Node.js 24 or later (`pkg install nodejs`). Unpack and install:
+
+```sh
+mkdir offline-deploy
+tar -xzf offline-deploy.tar.gz --strip-components=1 -C offline-deploy
+cd offline-deploy
+sh install.sh
+```
+
+npm blocks install scripts until they are approved. Approve the packages the first time and reinstall; otherwise `koffi` and `node-pty` stay unbuilded and `dsh web` fails:
+
+```sh
+npm install-scripts approve koffi node-pty protobufjs @deepseek-ai/dsh-subprocess-local
+rm -rf node_modules package-lock.json
+sh install.sh
+```
 
 ## Run
 
-### Run from `npm`
+```sh
+./node_modules/.bin/dsh web
+```
 
-Install `Node.js`, then run:
+The command prints a tokenized URL for the Web UI at `http://127.0.0.1:3080`. The first launch restarts itself once to add `--expose-internals`; that is expected.
+
+To make `dsh` a global command, symlink it:
 
 ```sh
-npx @deepseek-ai/dsh web
+ln -s ~/offline-deploy/node_modules/.bin/dsh $PREFIX/bin/dsh
+dsh web
 ```
-
-The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it in the default browser for a local launch. An SSH launch only prints the host URL because the SSH client or editor owns the local forwarded address. Pass `--no-open` to run the server without opening a browser. See [Web UI guide](docs/user/guide/index.md).
-
-### Run from source
-
-To run from a repository checkout:
-
-```sh
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
-pnpm install
-pnpm run build
-pnpm dsh web
-```
-
-`pnpm run build` prepares the repository artifacts. `pnpm dsh web` uses those built artifacts without rebuilding.
-
-## Community and support
-
-- Submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).
-- Add the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic to your plugin repository for discoverability.
-- Join <a href="https://discord.gg/4MrtZUhpxg">DeepSeek Harness Discord community</a>.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Development
-
-Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
-
-`pnpm run dev:web` builds, serves, and rebuilds client bundles on source edits in one terminal, and `make help` lists the matching Make targets for Web and Desktop; the guide's application commands section owns the full table.
-
-For agents, follow [AGENTS.md](AGENTS.md).
-
-## Citation
-
-```bibtex
-@misc{deepseek-harness2026,
-  title={DeepSeek Harness: Everything is a Plugin},
-  author={DeepSeek-AI},
-  year={2026},
-  publisher={GitHub},
-  howpublished={\url{https://github.com/deepseek-ai/deepseek-harness}},
-}
-```
+<table>
+  <tr>
+    <td><img src="termux-screenshot.jpg" alt="Termux run dsh web" width="280"></td>
+    <td><img src="web-ui.jpg" alt="DSH Web UI" width="280"></td>
+  </tr>
+</table>
 
 ## License
 
